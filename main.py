@@ -101,6 +101,7 @@ async def handle_messages(client, messages):
 async def indicate_empty():
     pass
 
+
 async def indicate_location():
     pass
 
