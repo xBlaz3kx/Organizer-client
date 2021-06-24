@@ -5,8 +5,67 @@ from ipaddress import ip_address
 from aiofiles import open
 from asyncio_mqtt import Client, MqttError
 from contextlib import AsyncExitStack
+from rpi_ws21x import PixelStrip, Color
 
 all_monitored_topics = []
+
+
+class LEDStrip:
+    LED_PIN = 18
+    LED_FREQ_HZ = 800000
+    LED_DMA = 10
+    LED_BRIGHTNESS = 255
+    LED_INVERT = False
+    LED_CHANNEL = 0  # set to '1' for GPIOs 13, 19, 41, 45 or 53
+
+    def __init__(self, num_leds):
+        self.LED_COUNT = num_leds
+        self.strip = PixelStrip(self.LED_COUNT, LEDStrip.LED_PIN, LEDStrip.LED_FREQ_HZ, LEDStrip.LED_DMA,
+                                LEDStrip.LED_BRIGHTNESS, LEDStrip.LED_INVERT,
+                                LEDStrip.LED_CHANNEL)
+
+        self.strip.begin()
+
+    def initCycle(self, iterations=1):
+        for j in range(256 * iterations):
+            for i in range(self.strip.numPixels()):
+                self.strip.setPixelColor(i, self._wheel((int(i * 256 / self.strip.numPixels()) + j) & 255))
+            self.strip.show()
+
+    def _wheel(self, pos):
+        if pos < 85:
+            return Color(pos * 3, 255 - pos * 3, 0)
+        elif pos < 170:
+            pos -= 85
+            return Color(255 - pos * 3, 0, pos * 3)
+        else:
+            pos -= 170
+            return Color(0, pos * 3, 255 - pos * 3)
+
+    async def blink(self, index: int, duration: int, color):
+        for i in range(0, 4):
+            if i % 2 == 0:
+                self.strip.setPixelColor(index, color)
+            else:
+                self.strip.setPixelColor(index, 0)
+            self.strip.show()
+            await asyncio.sleep(duration)
+
+    async def blink_interval(self, index: int, duration: int, color):
+        self.strip.setPixelColor(index, color)
+        self.strip.show()
+        await asyncio.sleep(duration)
+
+    def static(self, index: int, color):
+        self.strip.setPixelColor(index, color)
+        self.strip.show()
+
+    def off(self, index: int):
+        self.strip.setPixelColor(index, 0)
+        self.strip.show()
+
+
+ledStrip: LEDStrip = None
 
 
 class SettingsManager:
@@ -79,6 +138,7 @@ async def handle_messages(client, messages):
         json_message: dict = json.loads(message.payload.decode())
         print(json_message)
         if message.topic == f"/device/{device_id}/deviceShelves":
+            create_LEDStrip(len(json_message["shelves"]))
             for shelf in json_message["shelves"]:
                 shelf_id = shelf["shelfId"]
                 rack_id = shelf["rackId"]
@@ -93,17 +153,29 @@ async def handle_messages(client, messages):
             display_duration: int = json_message["displayDuration"]
             color: int = json_message["color"]
             if "/indicateLocation" in message.topic:
-                pass
+                await indicate_location(container_index, display_type, display_duration, color)
             elif "/indicateEmpty" in message.topic:
-                pass
+                await indicate_location(container_index, display_type, display_duration, color)
 
 
-async def indicate_empty():
-    pass
+def create_LEDStrip(num_leds: int):
+    global ledStrip
+    # Make the LED strip
+    ledStrip = LEDStrip(num_leds)
+    # Test the LEDs
+    ledStrip.initCycle(2)
 
 
-async def indicate_location():
-    pass
+async def indicate_location(index: int, display_type: str, display_duration: int, color):
+    if ledStrip is not None:
+        if display_type == "blink":
+            await ledStrip.blink(index, display_duration, color)
+        elif display_type == "static":
+            ledStrip.static(index, color)
+        elif display_type == "blinkInterval":
+            await ledStrip.blink_interval(index, display_duration, color)
+        elif display_type == "off":
+            ledStrip.off(index)
 
 
 async def cancel_tasks(tasks):
