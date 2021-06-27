@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import logging
 from ipaddress import ip_address
 from aiofiles import open
 from asyncio_mqtt import Client, MqttError
@@ -87,6 +88,7 @@ class SettingsManager:
 
 
 def check_ip_address(address):
+    logging.info(f"Checking validity of IP address {address}")
     try:
         ip_address(address)
         return True
@@ -97,6 +99,7 @@ def check_ip_address(address):
 async def connect_to_broker(mqtt_broker_address: str, device_id: str):
     if not (check_ip_address(mqtt_broker_address)):
         # if its not a valid IP address, exit
+        logging.error(f"Provided MQTT broker address is invalid")
         exit(-1)
     async with AsyncExitStack() as stack:
         # Keep track of the asyncio tasks that we create, so that we can cancel them on exit
@@ -126,6 +129,7 @@ async def post_to_topic(client: Client, topic: str, message: str):
 
 
 async def add_topic_filter(client: Client, stack: AsyncExitStack, topic_filter: str, tasks):
+    logging.info(f"Adding a topic filter {topic_filter}")
     manager = client.filtered_messages(topic_filter)
     messages = await stack.enter_async_context(manager)
     task = asyncio.create_task(handle_messages(client, messages))
@@ -136,7 +140,7 @@ async def handle_messages(client, messages):
     global all_monitored_topics
     async for message in messages:
         json_message: dict = json.loads(message.payload.decode())
-        print(json_message)
+        logging.info(f"Got a MQTT message: {json_message} at topic {message.topic}")
         if message.topic == f"/device/{device_id}/deviceShelves":
             create_LEDStrip(len(json_message["shelves"]))
             for shelf in json_message["shelves"]:
@@ -153,20 +157,27 @@ async def handle_messages(client, messages):
             display_duration: int = json_message["displayDuration"]
             color: int = json_message["color"]
             if "/indicateLocation" in message.topic:
+                logging.info("Indicating a container location")
                 await indicate_location(container_index, display_type, display_duration, color)
             elif "/indicateEmpty" in message.topic:
+                logging.info("Indicating a container empty")
                 await indicate_location(container_index, display_type, display_duration, color)
 
 
 def create_LEDStrip(num_leds: int):
     global ledStrip
     # Make the LED strip
+    logging.debug("Creating LED strip object")
     ledStrip = LEDStrip(num_leds)
     # Test the LEDs
+    logging.info("Testing LEDs")
     ledStrip.initCycle(2)
 
 
 async def indicate_location(index: int, display_type: str, display_duration: int, color):
+    logging.info(
+        f"Indicating a container at index:{index}, displayType: {display_type}, displayDuration:{display_duration}, "
+        f"color: {color}")
     if ledStrip is not None:
         if display_type == "blink":
             await ledStrip.blink(index, display_duration, color)
@@ -196,11 +207,12 @@ async def main():
     mqtt_broker_address: str = settings["info"]["mqtt_broker_ip"]
     device_id: str = settings["info"]["device_id"]
     reconnect_interval: int = settings["info"]["retry_interval"]
+    logging.info(f"Device ID: {device_id}")
     while True:
         try:
             await connect_to_broker(mqtt_broker_address, device_id)
         except MqttError as error:
-            print(f'Error "{error}". Reconnecting in {reconnect_interval} seconds.')
+            logging.error(f"Reconnecting in {reconnect_interval}", exc_info=error)
         finally:
             await asyncio.sleep(reconnect_interval)
 
